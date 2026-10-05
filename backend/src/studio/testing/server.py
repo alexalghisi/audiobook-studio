@@ -20,10 +20,12 @@ def free_port() -> int:
 
 
 @contextmanager
-def serve(app: ASGIApp, port: int | None = None) -> Iterator[str]:
+def serve(app: ASGIApp, port: int | None = None, lifespan: bool = False) -> Iterator[str]:
     port = port or free_port()
     server = uvicorn.Server(
-        uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off")
+        uvicorn.Config(
+            app, host="127.0.0.1", port=port, log_level="warning", lifespan="on" if lifespan else "off"
+        )
     )
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
