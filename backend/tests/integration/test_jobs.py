@@ -128,7 +128,6 @@ async def test_jobs_of_a_dead_worker_are_recovered(rt: Runtime, provider: Counti
 async def test_job_lost_by_redis_is_reconciled_from_postgres(rt: Runtime) -> None:
     from datetime import timedelta
 
-    from studio.jobs.handlers import default_handlers
     from studio.jobs.worker import Worker
 
     project_id = await import_book(rt)
@@ -139,7 +138,7 @@ async def test_job_lost_by_redis_is_reconciled_from_postgres(rt: Runtime) -> Non
         rt.sessions,
         rt.queue,
         rt.events,
-        default_handlers(rt.synthesizer),
+        rt.handlers(),
         poll_seconds=0.1,
         reconcile_after=timedelta(0),
     )

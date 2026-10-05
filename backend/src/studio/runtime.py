@@ -9,11 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from studio.audio.store import ContentStore
 from studio.config import Settings, get_settings
+from studio.db.models import JobKind
 from studio.db.session import SessionFactory, make_engine, make_session_factory
 from studio.jobs.events import EventBus
-from studio.jobs.handlers import default_handlers
+from studio.jobs.export import export_handler
+from studio.jobs.handlers import Handler, synthesize_handler
 from studio.jobs.queue import JobQueue
 from studio.jobs.worker import Worker
+from studio.render.renderer import Renderer
 from studio.services.audio_cache import AudioCache
 from studio.services.jobs import JobService
 from studio.services.projects import ProjectService
@@ -35,6 +38,8 @@ class Runtime:
     projects: ProjectService = field(init=False)
     jobs: JobService = field(init=False)
     synthesizer: Synthesizer = field(init=False)
+    renders: ContentStore = field(init=False)
+    renderer: Renderer = field(init=False)
 
     def __post_init__(self) -> None:
         s = self.settings
@@ -52,6 +57,8 @@ class Runtime:
         )
         self.jobs = JobService(self.sessions, self.queue, self.events, s.job_max_attempts)
         self.synthesizer = Synthesizer(self.sessions, self.cache, self.provider)
+        self.renders = ContentStore(s.renders_dir)
+        self.renderer = Renderer(self.renders)
 
     @classmethod
     def from_settings(cls, settings: Settings | None = None, provider: TTSProvider | None = None) -> Runtime:
@@ -65,6 +72,14 @@ class Runtime:
             provider=provider or build_provider(settings),
         )
 
+    def handlers(self) -> dict[JobKind, Handler]:
+        return {
+            JobKind.SYNTHESIZE: synthesize_handler(self.synthesizer),
+            JobKind.EXPORT: export_handler(
+                self.synthesizer, self.sessions, self.cache, self.renderer, self.settings.render_concurrency
+            ),
+        }
+
     def worker(
         self, worker_id: str | None = None, concurrency: int = 2, retry_base_seconds: float = 2.0
     ) -> Worker:
@@ -72,7 +87,7 @@ class Runtime:
             self.sessions,
             self.queue,
             self.events,
-            default_handlers(self.synthesizer),
+            self.handlers(),
             worker_id=worker_id,
             concurrency=concurrency,
             poll_seconds=self.settings.worker_poll_seconds,
