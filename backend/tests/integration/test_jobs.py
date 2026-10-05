@@ -173,3 +173,26 @@ async def test_progress_events_are_published(rt: Runtime) -> None:
     assert ("segment", "cached") in kinds
     done_values = [e["progress"]["done"] for e in received if e["type"] == "job" and e["status"] == "running"]  # type: ignore[index]
     assert done_values == sorted(done_values)
+
+
+async def test_worker_survives_redis_errors_while_claiming(
+    rt: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from redis.exceptions import TimeoutError as RedisTimeout
+
+    project_id = await import_book(rt, chapters=1, paragraphs=1)
+    job, _ = await rt.jobs.submit(project_id, JobKind.SYNTHESIZE, dedupe_key="all")
+    real_claim = rt.queue.claim
+    failures = {"left": 2}
+
+    async def flaky_claim(worker_id: str, wait_seconds: float) -> str | None:
+        if failures["left"]:
+            failures["left"] -= 1
+            raise RedisTimeout("Timeout reading from localhost:6379")
+        return await real_claim(worker_id, wait_seconds)
+
+    monkeypatch.setattr(rt.queue, "claim", flaky_claim)
+    async with running_worker(rt):
+        final = await wait_for_job(rt, job.id, timeout=20)
+    assert final.status == JobStatus.SUCCEEDED
+    assert failures["left"] == 0
