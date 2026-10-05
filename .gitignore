@@ -14,3 +14,4 @@ backend/data/
 bench/out/
 *.egg-info/
 .env
+*.tsbuildinfo
