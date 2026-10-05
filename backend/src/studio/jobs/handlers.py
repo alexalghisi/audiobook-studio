@@ -4,7 +4,6 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from studio.db.models import JobKind
 from studio.jobs.context import JobContext, JobFailedError
 from studio.services.synthesis import SynthesisStats, Synthesizer
 
@@ -32,7 +31,3 @@ def synthesize_handler(synthesizer: Synthesizer) -> Handler:
         return {"synthesis": stats.as_dict()}
 
     return handle
-
-
-def default_handlers(synthesizer: Synthesizer) -> dict[JobKind, Handler]:
-    return {JobKind.SYNTHESIZE: synthesize_handler(synthesizer)}

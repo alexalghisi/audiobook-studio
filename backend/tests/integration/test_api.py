@@ -186,3 +186,26 @@ async def test_event_stream_relays_progress(rt: Runtime, settings: Settings) -> 
     names = {name for name, _ in events}
     assert {"job", "segment"} <= names
     assert any(d.get("status") == "generating" for n, d in events if n == "segment")
+
+
+async def test_export_downloads_and_chapter_peaks(client: httpx.AsyncClient, rt: Runtime) -> None:
+    project = await _import(client)
+    async with running_worker(rt):
+        r = await client.post(f"/api/projects/{project['id']}/export")
+        job = await _wait_job(client, r.json()["id"])
+    assert job["status"] == "succeeded", job["error"]
+
+    book = job["result"]["book"]
+    m4b = await client.get(f"/api/renders/{book['key']}.m4b", params={"name": "Salt and Light"})
+    assert m4b.status_code == 200
+    assert m4b.headers["content-type"] == "audio/mp4"
+    assert m4b.headers["content-disposition"] == "attachment; filename*=utf-8''Salt%20and%20Light.m4b"
+
+    chapter = job["result"]["chapters"][0]
+    mp3 = await client.get(f"/api/renders/{chapter['key']}.mp3")
+    assert mp3.headers["content-type"] == "audio/mpeg"
+    peaks = (await client.get(f"/api/renders/{chapter['key']}/peaks")).json()
+    assert peaks["duration_ms"] == chapter["duration_ms"]
+
+    assert (await client.get(f"/api/renders/{chapter['key']}.wav")).status_code == 404
+    assert (await client.get("/api/renders/..%2F..%2Fetc.mp3")).status_code == 404

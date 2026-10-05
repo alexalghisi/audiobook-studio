@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     segment_hard_limit: int = 4500
 
     job_max_attempts: int = 3
+    render_concurrency: int = 2
     worker_lease_seconds: float = 15.0
     worker_poll_seconds: float = 1.0
 
