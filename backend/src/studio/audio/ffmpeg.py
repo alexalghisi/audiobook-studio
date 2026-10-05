@@ -17,7 +17,7 @@ class FfmpegError(RuntimeError):
     pass
 
 
-async def run(args: list[str], stdin: bytes | None = None) -> bytes:
+async def _exec(args: list[str], stdin: bytes | None = None) -> tuple[bytes, bytes]:
     proc = await asyncio.create_subprocess_exec(
         *args,
         stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
@@ -35,6 +35,11 @@ async def run(args: list[str], stdin: bytes | None = None) -> bytes:
     if proc.returncode != 0:
         tail = err.decode(errors="replace").strip().splitlines()[-5:]
         raise FfmpegError(f"{Path(args[0]).name} exited with {proc.returncode}: {' | '.join(tail)}")
+    return out, err
+
+
+async def run(args: list[str], stdin: bytes | None = None) -> bytes:
+    out, _ = await _exec(args, stdin)
     return out
 
 
@@ -44,14 +49,7 @@ async def ffmpeg(*args: str, stdin: bytes | None = None) -> bytes:
 
 async def ffmpeg_stderr(*args: str) -> str:
     """Runs ffmpeg for its analysis output (loudnorm, ebur128), which goes to stderr."""
-    proc = await asyncio.create_subprocess_exec(
-        "ffmpeg", "-hide_banner", "-nostdin", "-y", *args,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.PIPE,
-    )  # fmt: skip
-    _, err = await proc.communicate()
-    if proc.returncode != 0:
-        raise FfmpegError(f"ffmpeg exited with {proc.returncode}: {err.decode(errors='replace')[-400:]}")
+    _, err = await _exec(["ffmpeg", "-hide_banner", "-nostdin", "-y", *args])
     return err.decode(errors="replace")
 
 

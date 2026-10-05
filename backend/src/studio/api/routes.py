@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import uuid
 from collections.abc import AsyncIterator
 from typing import Annotated, Any
@@ -33,6 +34,7 @@ from studio.services.jobs import job_event
 from studio.services.projects import InvalidEditError, NotFoundError, SegmentChange
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+_CONTENT_KEY = re.compile(r"[0-9a-f]{64}")
 SSE_KEEPALIVE_SECONDS = 15.0
 
 router = APIRouter(prefix="/api")
@@ -248,6 +250,48 @@ async def synthesize(
                 raise _not_found("chapter")
             dedupe = f"synthesize:chapter:{body.chapter_id}"
     return await _submit(rt, project_id, JobKind.SYNTHESIZE, dedupe, scope, idempotency_key, response)
+
+
+@router.post("/projects/{project_id}/export", status_code=status.HTTP_202_ACCEPTED)
+async def export(
+    rt: RuntimeDep, project_id: uuid.UUID, response: Response, idempotency_key: IdempotencyKey = None
+) -> JobOut:
+    async with rt.sessions() as session:
+        if await session.get(Project, project_id) is None:
+            raise _not_found("project")
+    return await _submit(rt, project_id, JobKind.EXPORT, "export", {}, idempotency_key, response)
+
+
+_RENDER_TYPES = {"mp3": "audio/mpeg", "m4b": "audio/mp4"}
+_UNSAFE_FILENAME = re.compile(r"[^A-Za-z0-9 ._-]+")
+
+
+def _render_key(key: str) -> str:
+    if not _CONTENT_KEY.fullmatch(key):
+        raise _not_found("render")
+    return key
+
+
+@router.get("/renders/{key}.{ext}")
+async def render_file(rt: RuntimeDep, key: str, ext: str, name: str | None = None) -> FileResponse:
+    if ext not in _RENDER_TYPES or not rt.renders.exists(_render_key(key), ext):
+        raise _not_found("render")
+    filename = (_UNSAFE_FILENAME.sub("", name or "").strip() or key[:12])[:120]
+    return FileResponse(
+        rt.renders.path(key, ext),
+        media_type=_RENDER_TYPES[ext],
+        filename=f"{filename}.{ext}",
+        content_disposition_type="attachment" if name else "inline",
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+    )
+
+
+@router.get("/renders/{key}/peaks")
+async def render_peaks(rt: RuntimeDep, key: str) -> PeaksOut:
+    meta = rt.renderer.chapter_meta(_render_key(key))
+    if meta is None:
+        raise _not_found("render")
+    return PeaksOut.model_validate({"duration_ms": meta["duration_ms"], "peaks": meta["peaks"]})
 
 
 @router.get("/segments/{segment_id}/audio")
