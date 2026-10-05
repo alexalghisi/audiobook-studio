@@ -1,0 +1,78 @@
+{
+  "book": {
+    "chapters": 20,
+    "words": 12645,
+    "characters": 64896
+  },
+  "provider": "offline-espeak",
+  "cpus": 2,
+  "import_seconds": 0.16,
+  "runs": [
+    {
+      "run": "first export",
+      "seconds": 231.1,
+      "phases": {
+        "render_s": 205.35,
+        "package_s": 1.25,
+        "synthesis_s": 24.37
+      },
+      "segments": 160,
+      "synthesis_requests": 160,
+      "cache_hits": 0,
+      "cache_hit_rate": 0.0,
+      "chapters_rendered": 20,
+      "chapters_reused": 0,
+      "book_repackaged": true,
+      "audio_minutes": 77.0,
+      "lufs_range": [
+        -18.53,
+        -18.38
+      ],
+      "max_true_peak": -3.0
+    },
+    {
+      "run": "after editing one paragraph",
+      "seconds": 20.6,
+      "phases": {
+        "render_s": 18.35,
+        "package_s": 1.85,
+        "synthesis_s": 0.36
+      },
+      "segments": 160,
+      "synthesis_requests": 1,
+      "cache_hits": 159,
+      "cache_hit_rate": 0.9938,
+      "chapters_rendered": 1,
+      "chapters_reused": 19,
+      "book_repackaged": true,
+      "audio_minutes": 77.1,
+      "lufs_range": [
+        -18.53,
+        -18.38
+      ],
+      "max_true_peak": -3.0
+    },
+    {
+      "run": "no changes",
+      "seconds": 0.6,
+      "phases": {
+        "render_s": 0.09,
+        "package_s": 0.01,
+        "synthesis_s": 0.42
+      },
+      "segments": 160,
+      "synthesis_requests": 0,
+      "cache_hits": 160,
+      "cache_hit_rate": 1.0,
+      "chapters_rendered": 0,
+      "chapters_reused": 20,
+      "book_repackaged": false,
+      "audio_minutes": 77.1,
+      "lufs_range": [
+        -18.53,
+        -18.38
+      ],
+      "max_true_peak": -3.0
+    }
+  ]
+}
