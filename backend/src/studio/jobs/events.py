@@ -9,9 +9,11 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from redis.asyncio import Redis
+from redis.asyncio.client import PubSub
 
 
 class EventBus:
@@ -33,20 +35,26 @@ class EventBus:
                 pipe.publish(self.channel(project_id), json.dumps(event, default=str))
             await pipe.execute()
 
-    async def subscribe(
-        self, project_id: uuid.UUID | str, poll_seconds: float = 1.0
-    ) -> AsyncIterator[dict[str, Any] | None]:
-        """Yields events, or None every `poll_seconds` without one (so callers can send keep-alives)."""
+    @asynccontextmanager
+    async def subscription(self, project_id: uuid.UUID | str) -> AsyncIterator[Subscription]:
         pubsub = self._redis.pubsub()
         await pubsub.subscribe(self.channel(project_id))
         try:
-            while True:
-                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=poll_seconds)
-                if message is None:
-                    yield None
-                    continue
-                data = message["data"]
-                yield json.loads(data.decode() if isinstance(data, bytes) else data)
+            yield Subscription(pubsub)
         finally:
             await pubsub.unsubscribe()
             await pubsub.aclose()  # type: ignore[no-untyped-call]
+
+
+class Subscription:
+    def __init__(self, pubsub: PubSub) -> None:
+        self._pubsub = pubsub
+
+    async def get(self, wait_seconds: float) -> dict[str, Any] | None:
+        """The next event, or None if nothing arrived within `wait_seconds`."""
+        message = await self._pubsub.get_message(ignore_subscribe_messages=True, timeout=wait_seconds)
+        if message is None:
+            return None
+        data = message["data"]
+        event: dict[str, Any] = json.loads(data.decode() if isinstance(data, bytes) else data)
+        return event
