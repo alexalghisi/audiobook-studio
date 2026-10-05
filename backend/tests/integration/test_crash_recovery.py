@@ -89,7 +89,8 @@ async def test_killed_worker_resumes_without_resynthesizing(
     after_kill = fake.synthesized_texts[requests_before:]
     assert not set(after_kill) & cached_before, "cached segments were synthesized again"
     unique = len({s.text for s in await segments(rt, project_id)})
-    # At most the requests that were in flight at the moment of the kill are repeated.
-    assert len(fake.synthesized_texts) <= unique + 2
+    # Only audio that never reached the store is requested again: up to `concurrency` requests in
+    # flight plus as many responses still being written when the process died.
+    assert len(fake.synthesized_texts) <= unique + 2 * 2
     assert final.result["synthesis"]["cache_hits"] >= len(cached_before)
     await eleven.aclose()

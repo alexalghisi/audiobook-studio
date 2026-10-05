@@ -153,11 +153,13 @@ async def test_progress_events_are_published(rt: Runtime) -> None:
     received: list[dict[str, object]] = []
 
     async def listen() -> None:
-        async for event in rt.events.subscribe(project_id, poll_seconds=0.05):
-            if event is not None:
-                received.append(event)
-                if event.get("type") == "job" and event.get("status") == "succeeded":
-                    return
+        async with rt.events.subscription(project_id) as sub:
+            while True:
+                event = await sub.get(0.05)
+                if event is not None:
+                    received.append(event)
+                    if event.get("type") == "job" and event.get("status") == "succeeded":
+                        return
 
     listener = asyncio.create_task(listen())
     await asyncio.sleep(0.2)
