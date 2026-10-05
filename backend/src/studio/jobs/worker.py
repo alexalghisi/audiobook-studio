@@ -18,6 +18,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from redis.exceptions import RedisError
 from sqlalchemy import select, update
 
 from studio.db.models import ACTIVE_JOB_STATUSES, Job, JobStatus
@@ -60,12 +61,22 @@ class Worker:
         await self._queue.heartbeat(self.worker_id, [])
         maintenance = asyncio.create_task(self._maintenance_loop(stop))
         log.info("worker %s started", self.worker_id)
+        failures = 0
         try:
             while not stop.is_set():
                 if len(self._running) >= self._concurrency:
                     await asyncio.wait(set(self._running.values()), return_when=asyncio.FIRST_COMPLETED)
                     continue
-                job_id = await self._queue.claim(self.worker_id, self._poll)
+                try:
+                    job_id = await self._queue.claim(self.worker_id, self._poll)
+                    failures = 0
+                except (RedisError, OSError) as exc:
+                    # Redis restarting or briefly unreachable must not kill the worker.
+                    failures += 1
+                    delay = min(30.0, 0.5 * 2 ** min(failures, 6))
+                    log.warning("claim failed (%s); retrying in %.1fs", exc, delay)
+                    await asyncio.sleep(delay)
+                    continue
                 if job_id is None:
                     continue
                 task = asyncio.create_task(self._process(job_id))
@@ -128,7 +139,12 @@ class Worker:
         except Exception:
             log.exception("job %s crashed the worker loop", job_id)
         finally:
-            await self._queue.ack(self.worker_id, job_id)
+            try:
+                await self._queue.ack(self.worker_id, job_id)
+            except (RedisError, OSError):
+                # The outcome is already in PostgreSQL; a stale processing entry is
+                # harmless because a redelivered finished job is skipped.
+                log.warning("could not ack job %s", job_id, exc_info=True)
 
     async def _start(self, job_id: str) -> Job | None:
         cancelled: Job | None = None
