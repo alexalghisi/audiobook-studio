@@ -17,10 +17,10 @@ from studio.audio.wav import pcm_to_wav, repair_streamed_wav
 from studio.tts import formant
 from studio.tts.base import ProviderError, SynthesisRequest, SynthesisResult, Voice
 
-# voice_id -> (espeak-ng voice, base pitch 0-99, description)
+# voice_id -> (espeak-ng voice, base pitch 0-99, display name)
 OFFLINE_VOICES: dict[str, tuple[str, int, str]] = {
-    "narrator-us-m": ("en-us+m3", 45, "US English, male narrator"),
-    "narrator-us-f": ("en-us+f3", 55, "US English, female narrator"),
+    "narrator-us-m": ("en-us+m3", 45, "US English, male"),
+    "narrator-us-f": ("en-us+f3", 55, "US English, female"),
     "narrator-gb-m": ("en-gb-x-rp+m1", 40, "British English (RP), male"),
     "narrator-gb-f": ("en-gb+f2", 60, "British English, female"),
 }
@@ -66,7 +66,7 @@ class EspeakProvider:
         return SynthesisResult(audio=repair_streamed_wav(out), format="wav")
 
     async def list_voices(self) -> list[Voice]:
-        return [Voice(voice_id, voice_id, desc) for voice_id, (_, _, desc) in OFFLINE_VOICES.items()]
+        return [Voice(voice_id, name, "offline") for voice_id, (_, _, name) in OFFLINE_VOICES.items()]
 
     async def aclose(self) -> None:
         return None
@@ -90,7 +90,7 @@ class FormantProvider:
         return SynthesisResult(audio=pcm_to_wav(pcm, formant.SAMPLE_RATE), format="wav")
 
     async def list_voices(self) -> list[Voice]:
-        return [Voice(voice_id, voice_id, desc) for voice_id, (_, _, desc) in OFFLINE_VOICES.items()]
+        return [Voice(voice_id, name, "offline") for voice_id, (_, _, name) in OFFLINE_VOICES.items()]
 
     async def aclose(self) -> None:
         return None

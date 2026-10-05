@@ -71,9 +71,14 @@ class Synthesizer:
 
         async def process(item: _Work) -> None:
             nonlocal done
-            await self._set_status(ctx, dict.fromkeys(item.segment_ids, item.key), SegmentStatus.GENERATING)
             try:
-                await self._synthesize(item)
+                # The slot is taken here, not around the HTTP call alone, so "generating"
+                # means a request is really in flight and the rest show as queued.
+                async with self._slots:
+                    await self._set_status(
+                        ctx, dict.fromkeys(item.segment_ids, item.key), SegmentStatus.GENERATING
+                    )
+                    await self._synthesize(item)
             except Exception as exc:
                 if not isinstance(exc, ProviderError):
                     log.exception("unexpected error synthesizing %s", item.key)
@@ -180,8 +185,7 @@ class Synthesizer:
                 del self._inflight[item.key]
 
     async def _produce(self, item: _Work) -> None:
-        async with self._slots:
-            result = await self._provider.synthesize(item.request)
+        result = await self._provider.synthesize(item.request)
         await self._cache.put(item.key, result, self._provider.name)
 
     async def _set_status(
