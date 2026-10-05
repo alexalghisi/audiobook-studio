@@ -3,8 +3,10 @@
 A chapter is rendered in three steps: segment audio is decoded and stitched
 with pauses (short between sentences of a paragraph, longer between
 paragraphs, room tone at head and tail), the result is loudness normalized in
-two passes, and it is encoded as a 192 kbps CBR MP3 with ID3 tags. The book
-is the chapter MP3s concatenated into an AAC M4B with a chapter marker each.
+two passes, and it is encoded as a 192 kbps CBR MP3 with ID3 tags and, from
+the same pass, as AAC. The book is the chapters' AAC streams joined by stream
+copy into an M4B with a chapter marker each, so changing one chapter costs
+one chapter's encode plus a copy, not a re-encode of the whole book.
 
 Every output is stored under a key derived from its inputs (segment audio
 keys, pauses, loudness target, tags). Rendering a chapter whose key already
@@ -31,7 +33,7 @@ from studio.audio.store import ContentStore
 from studio.audio.wav import pcm_to_wav
 from studio.render.loudness import LoudnessTarget, analyze, second_pass_filter
 
-RENDER_VERSION = 1
+RENDER_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +72,10 @@ class RenderedChapter:
     integrated_lufs: float
     true_peak_dbtp: float
     cached: bool
+    # AAC copy of the same normalized audio, encoded once per chapter so the M4B
+    # can be assembled by stream copy instead of re-encoding the whole book.
+    aac_path: Path
+    aac_duration_ms: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,11 +132,11 @@ class Renderer:
     async def render_chapter(self, spec: ChapterSpec, book: BookMeta, total_tracks: int) -> RenderedChapter:
         key = self.chapter_key(spec, book)
         meta_path = self._store.path(key, "json")
-        if self._store.exists(key, "mp3") and meta_path.is_file():
+        if self._store.exists(key, "mp3") and self._store.exists(key, "m4a") and meta_path.is_file():
             meta = json.loads(meta_path.read_text())
             return RenderedChapter(
                 key, self._store.path(key, "mp3"), meta["duration_ms"], meta["integrated_lufs"],
-                meta["true_peak_dbtp"], cached=True,
+                meta["true_peak_dbtp"], True, self._store.path(key, "m4a"), meta["aac_duration_ms"],
             )  # fmt: skip
 
         pcm = await self._stitch(spec)
@@ -140,10 +146,14 @@ class Renderer:
             stitched.write_bytes(pcm_to_wav(pcm, SAMPLE_RATE))
             measured = await analyze(stitched, self._target)
             out = Path(tmp) / "chapter.mp3"
+            aac = Path(tmp) / "chapter.m4a"
+            # One normalization pass feeds both encoders.
             stderr = await ffmpeg_stderr(
                 "-i", str(stitched),
-                "-af", second_pass_filter(self._target, measured),
-                "-ar", str(SAMPLE_RATE), "-ac", "1",
+                "-filter_complex",
+                f"[0:a]{second_pass_filter(self._target, measured)},"
+                f"aresample={SAMPLE_RATE},asplit=2[mp3][aac]",
+                "-map", "[mp3]", "-ac", "1",
                 "-c:a", "libmp3lame", "-b:a", self._bitrate,
                 "-id3v2_version", "3",
                 "-metadata", f"title={spec.title}",
@@ -152,11 +162,14 @@ class Renderer:
                 "-metadata", f"track={spec.track}/{total_tracks}",
                 "-metadata", "genre=Audiobook",
                 str(out),
+                "-map", "[aac]", "-ac", "1", "-c:a", "aac", "-b:a", "64k", str(aac),
             )  # fmt: skip
             result = json.loads(stderr[stderr.rfind("{") : stderr.rfind("}") + 1])
             duration_ms = round(float((await probe(out))["format"]["duration"]) * 1000)
+            aac_duration_ms = round(float((await probe(aac))["format"]["duration"]) * 1000)
             meta = {
                 "duration_ms": duration_ms,
+                "aac_duration_ms": aac_duration_ms,
                 "integrated_lufs": float(result["output_i"]),
                 "true_peak_dbtp": float(result["output_tp"]),
                 "normalization": result.get("normalization_type"),
@@ -165,10 +178,12 @@ class Renderer:
             meta["peaks"] = compute_peaks(peaks_pcm, buckets_for(duration_ms, per_second=10))
             # The JSON sidecar is written last: its presence marks the render as complete.
             path = self._store.adopt(key, "mp3", out)
+            aac_path = self._store.adopt(key, "m4a", aac)
         self._store.write(key, "json", json.dumps(meta).encode())
         return RenderedChapter(
-            key, path, duration_ms, meta["integrated_lufs"], meta["true_peak_dbtp"], cached=False
-        )
+            key, path, duration_ms, meta["integrated_lufs"], meta["true_peak_dbtp"], False,
+            aac_path, aac_duration_ms,
+        )  # fmt: skip
 
     def chapter_meta(self, key: str) -> dict[str, object] | None:
         path = self._store.path(key, "json")
@@ -205,14 +220,14 @@ class Renderer:
         position = 0
         for _, chapter in chapters:
             starts.append(position)
-            position += chapter.duration_ms
+            position += chapter.aac_duration_ms
         if self._store.exists(key, "m4b"):
             return RenderedBook(key, self._store.path(key, "m4b"), position, starts, cached=True)
 
         self._store.root.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=self._store.root, prefix=".book-") as tmp:
             concat = Path(tmp) / "chapters.txt"
-            concat.write_text("".join(f"file '{ch.path.resolve()}'\n" for _, ch in chapters))
+            concat.write_text("".join(f"file '{ch.aac_path.resolve()}'\n" for _, ch in chapters))
             metadata = Path(tmp) / "chapters.ffmeta"
             metadata.write_text(_ffmetadata(chapters, starts, book))
             out = Path(tmp) / "book.m4b"
@@ -220,7 +235,7 @@ class Renderer:
                 "-f", "concat", "-safe", "0", "-i", str(concat),
                 "-i", str(metadata),
                 "-map", "0:a", "-map_metadata", "1", "-map_chapters", "1",
-                "-c:a", "aac", "-b:a", "64k", "-ar", str(SAMPLE_RATE), "-ac", "1",
+                "-c", "copy",
                 "-movflags", "+faststart", "-f", "mp4",
                 str(out),
             )  # fmt: skip
@@ -248,7 +263,7 @@ def _ffmetadata(chapters: Sequence[tuple[str, RenderedChapter]], starts: list[in
             "[CHAPTER]",
             "TIMEBASE=1/1000",
             f"START={start}",
-            f"END={start + chapter.duration_ms}",
+            f"END={start + chapter.aac_duration_ms}",
             f"title={_escape(title)}",
         ]
     return "\n".join(lines) + "\n"

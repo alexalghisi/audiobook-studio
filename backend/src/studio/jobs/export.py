@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 from sqlalchemy import select
@@ -71,8 +72,18 @@ def export_handler(
     chapter_concurrency: int = 2,
 ) -> Handler:
     async def handle(ctx: JobContext) -> dict[str, Any]:
+        clock = time.perf_counter()
+        timings: dict[str, float] = {}
+
+        def lap(phase: str) -> None:
+            nonlocal clock
+            now = time.perf_counter()
+            timings[phase] = round(now - clock, 2)
+            clock = now
+
         stats = await synthesizer.run(ctx)
         raise_on_failures(stats)
+        lap("synthesis_s")
 
         book, specs = await _load_specs(sessions, cache, ctx)
         total = len(specs) + 1
@@ -102,13 +113,16 @@ def export_handler(
                 raise JobCancelledError from None
             raise group_error.exceptions[0] from None
 
+        lap("render_s")
         await ctx.check_cancelled()
         await ctx.report("packaging", done, total, force=True)
         chapters = [(spec.title, rendered[i]) for i, (_, spec) in enumerate(specs)]
         audiobook = await renderer.render_book(chapters, book)
         await ctx.report("packaging", total, total, force=True)
+        lap("package_s")
         return {
             "synthesis": stats.as_dict(),
+            "timings": timings,
             "chapters": [
                 {
                     "chapter_id": str(chapter.id),
